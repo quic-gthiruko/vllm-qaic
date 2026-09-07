@@ -65,6 +65,16 @@ echo "INFO: checking out commit ${TRITON_CPU_COMMIT}"
 git -C "${TRITON_CPU_SRC}" checkout "${TRITON_CPU_COMMIT}"
 git -C "${TRITON_CPU_SRC}" submodule update --init --recursive
 
+# CMake 4.x with Ninja cannot relink SLEEF during installation unless the
+# install RPATH is used during the build. Triton's setup.py does not forward
+# CMAKE_ARGS, so set the option in Triton's top-level project explicitly.
+TRITON_CMAKE_FILE="${TRITON_CPU_SRC}/CMakeLists.txt"
+if ! grep -q '^set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)$' "${TRITON_CMAKE_FILE}"; then
+    sed -i '/^project(/a set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)' \
+        "${TRITON_CMAKE_FILE}"
+fi
+grep -q '^set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)$' "${TRITON_CMAKE_FILE}"
+
 # ── Resolve the active Python / pip ────────────────────────────────────────
 # Prefer ${VIRTUAL_ENV}/bin/python when a venv is active — command -v python can
 # resolve to a shadowing conda python when conda's bin appears in PATH before the
@@ -132,9 +142,11 @@ export TRITON_CUPTI_LIB_PATH="${TRITON_CUPTI_LIB_PATH:-/usr/lib/x86_64-linux-gnu
 # Versions match triton-cpu's pyproject.toml [build-system].requires
 ${PIP} install "pybind11>=2.13.1" "ninja>=1.11.1"
 
-# ── Install (editable, no build isolation so it reuses existing torch) ──────
-echo "=== Building and installing triton-cpu (editable) ==="
-if ! MAX_JOBS="${TRITON_CPU_COMPILE_MAX_JOBS:-4}" ${PIP} install -e "${TRITON_CPU_SRC}/python" --no-build-isolation; then
+# ── Install (no build isolation so it reuses existing torch) ────────────────
+# Install a regular wheel rather than an editable package: the source tree is
+# stored in a BuildKit cache mount and is not present in downstream images.
+echo "=== Building and installing triton-cpu ==="
+if ! MAX_JOBS="${TRITON_CPU_COMPILE_MAX_JOBS:-4}" ${PIP} install "${TRITON_CPU_SRC}/python" --no-build-isolation; then
     echo "" >&2
     echo "ERROR: triton-cpu C++ build failed (see output above)." >&2
     echo "  If the error mentions 'Disk quota exceeded' or 'No space left on device':" >&2
