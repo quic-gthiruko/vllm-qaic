@@ -125,7 +125,7 @@ ARG QEFF_BRANCH="release/v1.22.0"
 ARG TORCH_VERSION_AOT="2.7.0+cpu"
 ARG TORCHVISION_VERSION_AOT="0.22.0+cpu"
 ARG VLLM_TARGET_DEVICE_AOT="empty"
-ARG ENABLE_UCX_NIXL_RDMA="1"
+ARG ENABLE_UCX_NIXL_RDMA="0"
 
 # ---------------------------------------------------------------------------
 # triton-cpu — shared by aot-base, installed BEFORE vllm so vllm sees it.
@@ -248,7 +248,7 @@ ARG QEFF_BRANCH="release/v1.22.0"
 ARG TORCH_VERSION_AOT="2.7.0+cpu"
 ARG TORCHVISION_VERSION_AOT="0.22.0+cpu"
 ARG VLLM_TARGET_DEVICE_AOT="empty"
-ARG ENABLE_UCX_NIXL_RDMA="1"
+ARG ENABLE_UCX_NIXL_RDMA="0"
 ARG TRITON_CPU="1"
 ARG TRITON_CPU_COMMIT="e60f448f8f197073b75d6d3e77347414a5db3ee7"
 ARG TRITON_CPU_COMPILE_MAX_JOBS="4"
@@ -429,6 +429,26 @@ ENV VLLM_PLUGINS=qaic,qaic_kv_connector
 # RELEASE — non-editable install from a published git ref.
 # Fully reproducible from ARG pins alone; no COPY from build context.
 # ===========================================================================
+# Keep RDMA userspace in a separate runtime stage. The UCX build stage installs
+# these packages for compilation, but multi-stage builds do not carry Debian
+# packages into the final image when only /opt/ucx-runtime is copied.
+FROM ${BASE_IMAGE} AS aot-runtime
+
+ARG ENABLE_UCX_NIXL_RDMA="0"
+
+RUN --mount=type=cache,sharing=locked,target=/var/cache/apt \
+    --mount=type=cache,sharing=locked,target=/var/lib/apt \
+    if [ "${ENABLE_UCX_NIXL_RDMA}" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            rdma-core \
+            libibverbs1 \
+            ibverbs-providers \
+            ibverbs-utils && \
+        rm -rf /var/lib/apt/lists/*; \
+    else \
+        echo "INFO: RDMA userspace packages skipped"; \
+    fi
+
 FROM aot-base AS release-builder
 
 ARG VENV="/opt/venv-aot"
@@ -448,7 +468,7 @@ RUN --mount=type=cache,sharing=locked,target=/var/cache/uv \
     uv pip install --no-build-isolation /src/vllm-qaic-release
 
 # hadolint ignore=DL3006
-FROM ${BASE_IMAGE} AS release
+FROM aot-runtime AS release
 
 ARG VENV
 
@@ -499,7 +519,7 @@ RUN --mount=type=cache,sharing=locked,target=/var/cache/uv \
     uv pip install -r "${SRC}/requirements/test.txt"
 
 # hadolint ignore=DL3006
-FROM ${BASE_IMAGE} AS ci
+FROM aot-runtime AS ci
 
 ARG VENV
 
@@ -579,7 +599,7 @@ RUN --mount=type=cache,sharing=locked,target=/var/cache/uv \
     uv pip install -r /src/vllm-qaic/requirements/test.txt
 
 # hadolint ignore=DL3006
-FROM ${BASE_IMAGE} AS dev
+FROM aot-runtime AS dev
 
 ARG VENV="/opt/venv-aot"
 

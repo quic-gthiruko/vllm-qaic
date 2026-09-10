@@ -266,6 +266,7 @@ All `ARG`s are global (declared before the first `FROM`) and re-declared inside 
 | `TRITON_CPU` | `1` | Set to `1` to build the triton-cpu backend (AOT SpD); Docker defaults ON, unlike `install.sh`'s default OFF |
 | `TRITON_CPU_COMMIT` | `e60f448f8f197073b75d6d3e77347414a5db3ee7` | Pinned triton-cpu commit hash |
 | `TRITON_CPU_COMPILE_MAX_JOBS` | `4` | Parallel build jobs for triton-cpu compilation |
+| `ENABLE_UCX_NIXL_RDMA` | `0` | Set to `1` to include UCX, NIXL, Mooncake, and RDMA userspace packages |
 | `VLLM_BUILD_RUST` | `1` | Set to `1` to build vLLM's experimental Rust OpenAI frontend (`vllm-rs`) |
 | `VLLM_QAIC_GIT_REF` | `v0.23.0` | `release` target: vllm-qaic git tag/branch to clone |
 | `VLLM_QAIC_PR` | *(empty)* | `ci` target: PR number to fetch (takes priority over `VLLM_QAIC_BRANCH`) |
@@ -329,6 +330,38 @@ docker build --target dev -f docker/Dockerfile.pyt -t vllm-qaic-pyt:dev .
 ```
 
 The `BASE_IMAGE` used by any target must have the QAIC Platform and Apps SDKs installed (`/opt/qti-aic/` present) so vllm-qaic can load at runtime; override with `--build-arg BASE_IMAGE=...`.
+
+### RDMA and UCX runtime
+
+When `ENABLE_UCX_NIXL_RDMA=1`, the AOT `release`, `ci`, and `dev` images include
+the RDMA userspace stack required by UCX and NIXL: `rdma-core`, `libibverbs1`,
+`ibverbs-providers`, and `ibverbs-utils` (including `ibv_devinfo`). UCX is built
+with verbs support when the RDMA development libraries are available during the
+image build. Set `--build-arg ENABLE_UCX_NIXL_RDMA=0` to omit the complete
+UCX/NIXL/RDMA stack.
+
+RDMA devices and memory locking are supplied by the container deployment, not
+the image. Start an AOT image with:
+
+```bash
+docker run --rm --network host --ipc host \
+  --device=/dev/infiniband \
+  --cap-add IPC_LOCK --ulimit memlock=-1 \
+  -e UCX_TLS=rc \
+  -e UCX_NET_DEVICES=rocep179s0f0:1 \
+  vllm-qaic-aot:1.22
+```
+
+Set `UCX_NET_DEVICES` to the HCA and port on the deployment host. If the
+selector is omitted, UCX may choose a different available device; if
+`UCX_TLS` is omitted, it may prefer TCP or shared-memory transports. Use
+`ibv_devinfo -l` and `ucx_info -d` inside the running container to inspect the
+available HCAs and transports.
+
+The AOT image's UCX build does not provide CUDA memory transport support by
+default. CPU DRAM RDMA transfers are supported; GPU-memory NIXL transfers
+require a UCX build with CUDA support and the matching CUDA runtime in the
+base image. The PYT image does not install the AOT UCX/NIXL stack.
 
 ### Entrypoint script (dev only)
 
